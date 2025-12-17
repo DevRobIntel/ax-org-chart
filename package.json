@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "core-js": "^3.8.3",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^3.0.4",
     "roboto-fontface": "*",
     "vue": "^3.2.13",
     "vuedraggable": "^4.1.0",

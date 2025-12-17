@@ -1,11 +1,34 @@
 <template>
-  <v-app>
-    <v-app-bar app color="primary" dark elevation="4">
-      <v-toolbar-title class="text-h6">AX Capital Organizational Chart Manager</v-toolbar-title>
+  <v-app :dark="isDarkMode">
+    <v-app-bar app color="primary" :dark="!isDarkMode" elevation="4">
+      <v-toolbar-title class="text-h6">AX Capital Org Chart Manager</v-toolbar-title>
       <v-spacer />
+      <!-- Search Bar -->
+      <v-text-field
+        v-model="searchQuery"
+        prepend-inner-icon="mdi-magnify"
+        label="Search Employees"
+        class="mx-4"
+        hide-details
+        clearable
+        outlined
+        dense
+        style="max-width: 300px;"
+      />
+      <!-- Dark Mode Toggle -->
+      <v-switch
+        v-model="isDarkMode"
+        inset
+        :label="isDarkMode ? 'Light Mode' : 'Dark Mode'"
+        class="mt-4"
+      />
       <v-btn @click="exportData" text>
         <v-icon left>mdi-download</v-icon>
         Export to JSON
+      </v-btn>
+      <v-btn @click="exportToPDF" text>
+        <v-icon left>mdi-file-pdf-box</v-icon>
+        Export to PDF
       </v-btn>
     </v-app-bar>
 
@@ -36,18 +59,26 @@
             <v-card-subtitle class="text-h6">
               Total Employees
             </v-card-subtitle>
+            <v-card-actions class="justify-center">
+              <v-btn icon @click="openEditDialog(company)">
+                <v-icon>mdi-pencil</v-icon>
+              </v-btn>
+              <v-btn icon @click="openAddDialog(company)">
+                <v-icon>mdi-plus</v-icon>
+              </v-btn>
+            </v-card-actions>
           </v-card>
         </div>
 
         <div class="departments-horizontal d-flex overflow-x-auto pa-8" style="gap: 50px;">
-          <!-- Each department column -->
+          <!-- Filtered Departments -->
           <div
-            v-for="dept in departments"
+            v-for="dept in filteredDepartments"
             :key="dept.id"
             class="department-column flex-shrink-0 pa-4 rounded-lg"
             style="min-width: 340px; background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"
           >
-            <!-- Department Header Card with Count -->
+            <!-- Department Header with Count and Collapse -->
             <v-card
               class="mb-10 pa-5 text-center"
               width="340"
@@ -72,6 +103,9 @@
                 {{ dept.position }}
               </v-card-subtitle>
               <v-card-actions class="justify-center mt-4">
+                <v-btn icon @click="dept.expanded = !dept.expanded">
+                  <v-icon>{{ dept.expanded ? 'mdi-chevron-up' : 'mdi-chevron-down' }}</v-icon>
+                </v-btn>
                 <v-btn icon @click="openEditDialog(dept)">
                   <v-icon>mdi-pencil</v-icon>
                 </v-btn>
@@ -84,27 +118,31 @@
               </v-card-actions>
             </v-card>
 
-            <!-- Recursive Employees with Hierarchy Visualization -->
-            <draggable
-              :list="dept.children"
-              group="org"
-              item-key="id"
-              @end="saveData"
-              class="employees-list"
-              ghost-class="ghost-card"
-            >
-              <template #item="{ element }">
-                <div class="employee-wrapper">
-                  <org-node
-                    :node="element"
-                    @edit="openEditDialog"
-                    @delete="deleteNode"
-                    @add-child="openAddDialog"
-                    @update="saveData"
-                  />
-                </div>
-              </template>
-            </draggable>
+            <!-- Expandable Employees -->
+            <v-expand-transition>
+              <div v-show="dept.expanded">
+                <draggable
+                  :list="dept.children"
+                  group="org"
+                  item-key="id"
+                  @end="saveData"
+                  class="employees-list"
+                  ghost-class="ghost-card"
+                >
+                  <template #item="{ element }">
+                    <div class="employee-wrapper">
+                      <org-node
+                        :node="element"
+                        @edit="openEditDialog"
+                        @delete="deleteNode"
+                        @add-child="openAddDialog"
+                        @update="saveData"
+                      />
+                    </div>
+                  </template>
+                </draggable>
+              </div>
+            </v-expand-transition>
           </div>
         </div>
       </v-container>
@@ -122,11 +160,34 @@
           <v-text-field v-model="form.experience" label="Experience (e.g. 19 years)" outlined />
           <v-text-field v-model="form.languages" label="Languages" outlined />
           <v-text-field v-model="form.avatar" label="Avatar URL (optional)" outlined />
+          <v-text-field v-model="form.managerId" label="Manager ID (for sub-department/team)" outlined />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn color="grey" text @click="dialog = false">Cancel</v-btn>
           <v-btn color="primary" @click="saveForm">Save</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Employee Details Modal -->
+    <v-dialog v-model="detailsDialog" max-width="600px">
+      <v-card>
+        <v-card-title class="headline">Employee Details</v-card-title>
+        <v-card-text v-if="selectedEmployee">
+          <v-avatar size="100" class="mb-4">
+            <v-img :src="selectedEmployee.avatar" />
+          </v-avatar>
+          <p><strong>Name:</strong> {{ selectedEmployee.name }}</p>
+          <p><strong>Position:</strong> {{ selectedEmployee.position }}</p>
+          <p><strong>Manager:</strong> {{ getManagerName(selectedEmployee.parentId) }}</p>
+          <p><strong>Subordinates:</strong> {{ subordinateCount(selectedEmployee) }}</p>
+          <p><strong>Experience:</strong> {{ selectedEmployee.experience }}</p>
+          <p><strong>Languages:</strong> {{ selectedEmployee.languages }}</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="primary" text @click="detailsDialog = false">Close</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -138,6 +199,8 @@ import OrgNode from './components/OrgNode.vue'
 import draggable from 'vuedraggable'
 import orgData from './data/orgData.js'
 import { buildTree, flattenTree, generateUniqueId, addCounts } from './utils/treeUtils.js'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 export default {
   components: {
@@ -149,9 +212,13 @@ export default {
       flatNodes: JSON.parse(localStorage.getItem('orgData')) || orgData,
       tree: [],
       dialog: false,
+      detailsDialog: false,
       isEdit: false,
-      form: { id: null, parentId: null, name: '', position: '', experience: '', languages: '', avatar: '' },
+      form: { id: null, parentId: null, name: '', position: '', experience: '', languages: '', avatar: '', managerId: null },
       currentNode: null,
+      searchQuery: '',
+      isDarkMode: false,
+      selectedEmployee: null,
     }
   },
   computed: {
@@ -159,14 +226,35 @@ export default {
       return this.tree.find(node => node.position === 'Company') || { name: 'AX Capital', count: 0 };
     },
     departments() {
-      return this.company.children || [];
+      return (this.company.children || []).map(dept => ({
+        ...dept,
+        expanded: true  // Default expanded
+      }));
+    },
+    filteredDepartments() {
+      if (!this.searchQuery) return this.departments;
+      const query = this.searchQuery.toLowerCase();
+      return this.departments.map(dept => {
+        const filteredChildren = (dept.children || []).filter(child => this.filterNode(child, query));
+        return {
+          ...dept,
+          children: filteredChildren,
+          count: 1 + filteredChildren.reduce((sum, child) => sum + (child.count || 1), 0) - filteredChildren.length  // Adjust count
+        };
+      }).filter(dept => dept.children.length > 0 || dept.name.toLowerCase().includes(query));
     },
     totalEmployees() {
       return this.company.count || 0;
     },
   },
+  watch: {
+    isDarkMode(val) {
+      this.$vuetify.theme.dark = val;
+    },
+  },
   mounted() {
     this.tree = addCounts(buildTree(this.flatNodes));
+    this.isDarkMode = this.$vuetify.theme.dark;  // Sync with Vuetify
   },
   methods: {
     saveData() {
@@ -184,7 +272,8 @@ export default {
         position: '',
         experience: '',
         languages: '',
-        avatar: ''
+        avatar: '',
+        managerId: null
       };
       this.dialog = true;
     },
@@ -195,6 +284,7 @@ export default {
       this.dialog = true;
     },
     saveForm() {
+      if (this.form.managerId) this.form.parentId = this.form.managerId;  // Support manager assignment
       if (!this.form.id) {
         this.form.id = generateUniqueId(this.flatNodes);
         this.currentNode.children.push(this.form);
@@ -225,6 +315,28 @@ export default {
       a.download = 'ax-capital-org-hierarchy.json';
       a.click();
       URL.revokeObjectURL(url);
+    },
+    async exportToPDF() {
+      const pdf = new jsPDF('l', 'mm', 'a3');  // Landscape for wide chart
+      const canvas = await html2canvas(document.querySelector('.departments-horizontal'));
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
+      pdf.save('ax-capital-org-chart.pdf');
+    },
+    filterNode(node, query) {
+      if (node.name.toLowerCase().includes(query) || node.position.toLowerCase().includes(query)) return true;
+      if (node.children) node.children = node.children.filter(child => this.filterNode(child, query));
+      return node.children && node.children.length > 0;
+    },
+    getManagerName(parentId) {
+      const manager = this.flatNodes.find(node => node.id === parentId);
+      return manager ? manager.name : 'None';
+    },
+    subordinateCount(node) {
+      return (node.count || 1) - 1;
+    },
+    showDetails(employee) {
+      this.selectedEmployee = employee;
+      this.detailsDialog = true;
     },
   }
 }
@@ -261,7 +373,7 @@ export default {
   justify-content: center;
 }
 
-/* Modern Hierarchy Arrows with Animation */
+/* Hierarchy Arrows */
 .employees-list > .employee-wrapper:not(:first-child) {
   margin-top: 80px;
 }
